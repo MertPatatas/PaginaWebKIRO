@@ -127,18 +127,23 @@
   function hazardChance(lvl) { return lvl >= 2 ? Math.min((lvl - 1) * 0.04, 0.3) : 0; }
 
   // ---- rareza de ítems de impulso (probabilidad por plataforma sólida) ----
-  // de más común a más raro
+  // de más común a más raro — bajas, para que no salgan muchos a la vez
   const ITEM_RARITY = [
-    { kind: 'trampoline', p: 0.08 },  // común
-    { kind: 'spring',     p: 0.05 },  // frecuente
-    { kind: 'shield',     p: 0.025 }, // raro
-    { kind: 'booster',    p: 0.015 }, // muy raro
-    { kind: 'jetpack',    p: 0.008 }, // épico
+    { kind: 'trampoline', p: 0.030 },  // común
+    { kind: 'spring',     p: 0.018 },  // frecuente
+    { kind: 'shield',     p: 0.009 },  // raro
+    { kind: 'booster',    p: 0.005 },  // muy raro
+    { kind: 'jetpack',    p: 0.0025 }, // épico
   ];
+  // nº mínimo de plataformas sin ítem tras colocar uno (evita rachas)
+  const ITEM_SPACING = 5;
+  let itemCooldown = 0;
+
   function rollItem() {
+    if (itemCooldown > 0) { itemCooldown--; return null; }
     let r = Math.random();
     for (const it of ITEM_RARITY) {
-      if (r < it.p) return it.kind;
+      if (r < it.p) { itemCooldown = ITEM_SPACING; return it.kind; }
       r -= it.p;
     }
     return null;
@@ -177,6 +182,7 @@
     let y = H - 70;
     while (y > -H) { y -= gapFor(1); platforms.push(makePlatform(y, 1)); }
     score = 0; scoreAcc = 0; level = 1; cameraY = 0;
+    itemCooldown = 0;
     running = true; over.style.display = 'none';
   }
 
