@@ -192,13 +192,14 @@
       }
     }
 
-    // camera follows the HIGHEST point reached — only scrolls up on a new
-    // record height, so standing/bouncing in place does NOT move the screen
-    if (player.y < maxY) {
-      const dy = maxY - player.y;      // how much higher than ever before
-      maxY = player.y;
-      cameraY = maxY - H / 2;           // keep the record height at mid-screen
-      score += Math.round(dy);          // score grows only with real climbing
+    // camera: scroll the world DOWN only when the player rises above the
+    // middle line on screen. It never scrolls back, so bouncing in place is
+    // steady (the player just moves up and down within the screen).
+    const screenY = player.y - cameraY;      // player's position on screen
+    if (screenY < H / 2) {
+      const dy = H / 2 - screenY;            // how far above mid-screen
+      cameraY -= dy;                          // move world so player sits at mid
+      score += Math.round(dy);
     }
 
     spawnAbove();
