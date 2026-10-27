@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Doodle Jump</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    background: #87ceeb;
+    font-family: system-ui, Arial, sans-serif;
+    overflow: hidden;
+    touch-action: none;
+  }
+  #wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    background: linear-gradient(#aee4ff, #e8f7ff);
+  }
+  canvas {
+    background: #f4fbff;
+    border: 4px solid #333;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.25);
+    display: block;
+  }
+  #hud {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 22px;
+    font-weight: bold;
+    color: #333;
+    background: rgba(255,255,255,.7);
+    padding: 4px 14px;
+    border-radius: 999px;
+    pointer-events: none;
+  }
+  #over {
+    position: fixed;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: rgba(0,0,0,.45);
+    color: #fff;
+    text-align: center;
+  }
+  #over h1 { font-size: 40px; }
+  #over p { font-size: 22px; }
+  #over button {
+    font-size: 20px;
+    padding: 10px 24px;
+    border: none;
+    border-radius: 999px;
+    background: #4caf50;
+    color: #fff;
+    cursor: pointer;
+  }
+  #hint {
+    position: fixed;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #555;
+    font-size: 14px;
+    background: rgba(255,255,255,.6);
+    padding: 4px 12px;
+    border-radius: 999px;
+  }
+</style>
+</head>
+<body>
+  <div id="wrap"><canvas id="game"></canvas></div>
+  <div id="hud">0</div>
+  <div id="hint">Flechas / A-D o inclina el móvil</div>
+  <div id="over">
+    <h1>Game Over</h1>
+    <p id="finalScore">Puntos: 0</p>
+    <button id="retry">Jugar otra vez</button>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const hud = document.getElementById('hud');
+  const over = document.getElementById('over');
+  const finalScore = document.getElementById('finalScore');
+
+  const W = 400, H = 600;
+  canvas.width = W;
+  canvas.height = H;
+
+  const GRAVITY = 0.35;
+  const JUMP = -13;
+  const MOVE = 0.8;
+  const MAX_VX = 7;
+  const PLAT_W = 70, PLAT_H = 14;
+
+  let player, platforms, score, best = 0, running, cameraY;
+  let keys = { left: false, right: false };
+  let tiltX = 0;
+
+  function makePlatform(y) {
+    const type = Math.random() < 0.18 && score > 300 ? 'move' : 'fixed';
+    return {
+      x: Math.random() * (W - PLAT_W),
+      y,
+      type,
+      dir: Math.random() < 0.5 ? 1 : -1,
+      vx: 1.4
+    };
+  }
+
+  function reset() {
+    player = { x: W / 2 - 20, y: H - 120, w: 40, h: 40, vx: 0, vy: JUMP, face: 1 };
+    platforms = [];
+    // starting platform under player
+    platforms.push({ x: W / 2 - PLAT_W / 2, y: H - 70, type: 'fixed', dir: 1, vx: 0 });
+    let y = H - 70;
+    while (y > -H) {
+      y -= 60 + Math.random() * 50;
+      platforms.push(makePlatform(y));
+    }
+    score = 0;
+    cameraY = 0;
+    running = true;
+    over.style.display = 'none';
+  }
+
+  function spawnAbove() {
+    let topY = Math.min(...platforms.map(p => p.y));
+    while (topY > cameraY - H) {
+      topY -= 60 + Math.random() * 50;
+      platforms.push(makePlatform(topY));
+    }
+  }
+
+  function update() {
+    if (!running) return;
+
+    // input
+    let ax = 0;
+    if (keys.left) ax -= MOVE;
+    if (keys.right) ax += MOVE;
+    ax += tiltX * MOVE;
+    player.vx += ax;
+    if (!ax) player.vx *= 0.92;
+    player.vx = Math.max(-MAX_VX, Math.min(MAX_VX, player.vx));
+    player.x += player.vx;
+    if (player.vx > 0.2) player.face = 1;
+    if (player.vx < -0.2) player.face = -1;
+
+    // wrap horizontally
+    if (player.x + player.w < 0) player.x = W;
+    if (player.x > W) player.x = -player.w;
+
+    // gravity
+    player.vy += GRAVITY;
+    player.y += player.vy;
+
+    // moving platforms
+    for (const p of platforms) {
+      if (p.type === 'move') {
+        p.x += p.dir * p.vx;
+        if (p.x < 0 || p.x + PLAT_W > W) p.dir *= -1;
+      }
+    }
+
+    // collision (only when falling)
+    if (player.vy > 0) {
+      for (const p of platforms) {
+        if (player.x + player.w > p.x &&
+            player.x < p.x + PLAT_W &&
+            player.y + player.h > p.y &&
+            player.y + player.h < p.y + PLAT_H + player.vy) {
+          player.vy = JUMP;
+        }
+      }
+    }
+
+    // camera follows up
+    if (player.y < H / 2) {
+      const dy = H / 2 - player.y;
+      player.y = H / 2;
+      cameraY -= dy;
+      score += Math.round(dy);
+    }
+
+    spawnAbove();
+    // cull platforms below screen
+    platforms = platforms.filter(p => p.y - cameraY < H + 40);
+
+    // death
+    if (player.y - cameraY > H) {
+      gameOver();
+    }
+
+    hud.textContent = score;
+  }
+
+  function gameOver() {
+    running = false;
+    best = Math.max(best, score);
+    finalScore.textContent = 'Puntos: ' + score + '   Mejor: ' + best;
+    over.style.display = 'flex';
+  }
+
+  function drawPlayer() {
+    const y = player.y - cameraY;
+    ctx.fillStyle = '#5bc236';
+    ctx.beginPath();
+    ctx.ellipse(player.x + player.w / 2, y + player.h / 2, player.w / 2, player.h / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // eyes
+    ctx.fillStyle = '#fff';
+    const ex = player.face > 0 ? 8 : -8;
+    ctx.beginPath();
+    ctx.arc(player.x + player.w / 2 + ex - 5, y + 14, 5, 0, Math.PI * 2);
+    ctx.arc(player.x + player.w / 2 + ex + 5, y + 14, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#222';
+    ctx.beginPath();
+    ctx.arc(player.x + player.w / 2 + ex - 4, y + 15, 2, 0, Math.PI * 2);
+    ctx.arc(player.x + player.w / 2 + ex + 6, y + 15, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    // platforms
+    for (const p of platforms) {
+      const y = p.y - cameraY;
+      if (y < -PLAT_H || y > H) continue;
+      ctx.fillStyle = p.type === 'move' ? '#2e9bd6' : '#6b4f2a';
+      ctx.fillRect(p.x, y, PLAT_W, PLAT_H);
+      ctx.fillStyle = p.type === 'move' ? '#58c3f5' : '#3e8e41';
+      ctx.fillRect(p.x, y, PLAT_W, 5);
+    }
+    drawPlayer();
+  }
+
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // controls
+  addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
+    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+  });
+  addEventListener('keyup', e => {
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
+    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+  });
+  // tilt (mobile)
+  addEventListener('deviceorientation', e => {
+    if (e.gamma != null) tiltX = Math.max(-1, Math.min(1, e.gamma / 25));
+  });
+  // touch halves
+  addEventListener('touchstart', handleTouch);
+  addEventListener('touchmove', handleTouch);
+  addEventListener('touchend', () => { keys.left = keys.right = false; });
+  function handleTouch(e) {
+    const t = e.touches[0];
+    if (!t) return;
+    keys.left = t.clientX < innerWidth / 2;
+    keys.right = t.clientX >= innerWidth / 2;
+  }
+
+  document.getElementById('retry').addEventListener('click', reset);
+
+  reset();
+  loop();
+})();
+</script>
+</body>
+</html>
