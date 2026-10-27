@@ -102,24 +102,47 @@
 
   const GRAVITY = 0.35;
   const JUMP = -13;
-  const SPRING_JUMP = -22;     // muelle: rebote fuerte
-  const JETPACK_FORCE = -1.1;  // jetpack: empuje por cuadro
-  const JETPACK_FRAMES = 70;   // cuánto dura el jetpack
+  const TRAMPOLINE_JUMP = -17;  // trampolín: rebote medio
+  const SPRING_JUMP = -22;      // muelle: rebote alto
+  const BOOSTER_JUMP = -26;     // propulsor: impulso corto muy fuerte
+  const JETPACK_FORCE = -1.1;   // jetpack: empuje por cuadro
+  const JETPACK_FRAMES = 80;    // duración del jetpack
+  const SHIELD_FRAMES = 360;    // escudo: ~6 s a 60fps
   const MOVE = 0.8;
   const MAX_VX = 7;
   const PLAT_W = 70, PLAT_H = 14;
-  const SCORE_DIV = 10;        // menos puntos: 1 por cada 10 px subidos
+  const SCORE_DIV = 10;
 
   let player, platforms, score, scoreAcc, best = 0, running, cameraY, level;
   let keys = { left: false, right: false };
   let tiltX = 0;
 
-  // dificultad por nivel: cada nivel sube con los puntos
+  // ---- dificultad por nivel ----
   function levelFor(s) { return 1 + Math.floor(s / 500); }
-  function gapFor(lvl) { return 55 + Math.min(lvl * 6, 55); }          // huecos más grandes
-  function moveChance(lvl) { return Math.min(0.08 + lvl * 0.04, 0.38); } // más móviles
-  function breakChance(lvl) { return Math.min(lvl * 0.03, 0.22); }      // más frágiles
-  function holeChance(lvl) { return lvl >= 3 ? Math.min((lvl - 2) * 0.02, 0.12) : 0; } // agujeros desde nivel 3
+  function gapFor(lvl) { return 55 + Math.min(lvl * 6, 55); }
+  function moveChance(lvl) { return Math.min(0.08 + lvl * 0.04, 0.38); }
+  function breakChance(lvl) { return Math.min(lvl * 0.03, 0.22); }
+  function holeChance(lvl) { return lvl >= 3 ? Math.min((lvl - 2) * 0.02, 0.12) : 0; }
+  // obstáculos (pincho/monstruo) encima de plataformas: más con el nivel
+  function hazardChance(lvl) { return lvl >= 2 ? Math.min((lvl - 1) * 0.04, 0.3) : 0; }
+
+  // ---- rareza de ítems de impulso (probabilidad por plataforma sólida) ----
+  // de más común a más raro
+  const ITEM_RARITY = [
+    { kind: 'trampoline', p: 0.08 },  // común
+    { kind: 'spring',     p: 0.05 },  // frecuente
+    { kind: 'shield',     p: 0.025 }, // raro
+    { kind: 'booster',    p: 0.015 }, // muy raro
+    { kind: 'jetpack',    p: 0.008 }, // épico
+  ];
+  function rollItem() {
+    let r = Math.random();
+    for (const it of ITEM_RARITY) {
+      if (r < it.p) return it.kind;
+      r -= it.p;
+    }
+    return null;
+  }
 
   function makePlatform(y, lvl) {
     const r = Math.random();
@@ -128,40 +151,33 @@
     else if (r < holeChance(lvl) + breakChance(lvl)) type = 'break';
     else if (r < holeChance(lvl) + breakChance(lvl) + moveChance(lvl)) type = 'move';
 
-    // power-up encima de algunas plataformas sólidas
-    let power = null;
+    let power = null;      // ítem de impulso o escudo
+    let hazard = null;     // obstáculo que mata: 'spike' o 'monster'
     if (type === 'fixed' || type === 'move') {
-      const pr = Math.random();
-      if (pr < 0.05) power = 'jetpack';
-      else if (pr < 0.14) power = 'spring';
+      power = rollItem();
+      if (!power && Math.random() < hazardChance(lvl)) {
+        hazard = Math.random() < 0.5 ? 'spike' : 'monster';
+      }
     }
 
     return {
       x: Math.random() * (W - PLAT_W),
-      y,
-      type,
-      power,
+      y, type, power, hazard,
       dir: Math.random() < 0.5 ? 1 : -1,
-      vx: 1.4 + Math.min(lvl * 0.2, 2),
-      dead: false   // para plataformas que se rompen
+      vx: 1.4 + Math.min(lvl * 0.25, 2.6),
+      dead: false,
+      mphase: Math.random() * Math.PI * 2
     };
   }
 
   function reset() {
-    player = { x: W / 2 - 20, y: H - 120, w: 40, h: 40, vx: 0, vy: JUMP, face: 1, jet: 0 };
+    player = { x: W/2 - 20, y: H - 120, w: 40, h: 40, vx: 0, vy: JUMP, face: 1, jet: 0, shield: 0 };
     platforms = [];
-    platforms.push({ x: W / 2 - PLAT_W / 2, y: H - 70, type: 'fixed', power: null, dir: 1, vx: 0, dead: false });
+    platforms.push({ x: W/2 - PLAT_W/2, y: H - 70, type: 'fixed', power: null, hazard: null, dir: 1, vx: 0, dead: false });
     let y = H - 70;
-    while (y > -H) {
-      y -= gapFor(1);
-      platforms.push(makePlatform(y, 1));
-    }
-    score = 0;
-    scoreAcc = 0;
-    level = 1;
-    cameraY = 0;
-    running = true;
-    over.style.display = 'none';
+    while (y > -H) { y -= gapFor(1); platforms.push(makePlatform(y, 1)); }
+    score = 0; scoreAcc = 0; level = 1; cameraY = 0;
+    running = true; over.style.display = 'none';
   }
 
   function spawnAbove() {
@@ -174,16 +190,28 @@
 
   function doJump(force) { player.vy = force; }
 
-  function hitPower(p) {
-    if (p.power === 'spring') { doJump(SPRING_JUMP); }
-    else if (p.power === 'jetpack') { player.jet = JETPACK_FRAMES; }
-    p.power = null; // se consume
+  function takeItem(p) {
+    switch (p.power) {
+      case 'trampoline': doJump(TRAMPOLINE_JUMP); break;
+      case 'spring':     doJump(SPRING_JUMP); break;
+      case 'booster':    doJump(BOOSTER_JUMP); break;
+      case 'jetpack':    player.jet = JETPACK_FRAMES; break;
+      case 'shield':     player.shield = SHIELD_FRAMES; doJump(JUMP); break;
+    }
+    p.power = null;
+  }
+
+  // ¿el jugador toca el cuerpo de esta plataforma/obstáculo ahora?
+  function touching(p) {
+    const y = p.y;
+    return player.x + player.w > p.x && player.x < p.x + PLAT_W &&
+           player.y + player.h > y - 22 && player.y < y + PLAT_H;
   }
 
   function update() {
     if (!running) return;
 
-    // input horizontal
+    // horizontal
     let ax = 0;
     if (keys.left) ax -= MOVE;
     if (keys.right) ax += MOVE;
@@ -194,17 +222,17 @@
     player.x += player.vx;
     if (player.vx > 0.2) player.face = 1;
     if (player.vx < -0.2) player.face = -1;
-
-    // wrap horizontal
     if (player.x + player.w < 0) player.x = W;
     if (player.x > W) player.x = -player.w;
 
-    // jetpack: empuje hacia arriba mientras dure
+    // jetpack
     if (player.jet > 0) {
       player.vy += JETPACK_FORCE;
       if (player.vy < -16) player.vy = -16;
       player.jet--;
     }
+    // escudo cuenta atrás
+    if (player.shield > 0) player.shield--;
 
     // gravedad + barrido
     const prevFoot = player.y + player.h;
@@ -220,28 +248,40 @@
       }
     }
 
-    // colisión al caer (barrido anti-tunnel)
+    // --- obstáculos que matan (agujero, pincho, monstruo) ---
+    for (const p of platforms) {
+      if (p.dead) continue;
+      const isHole = p.type === 'hole';
+      const isHazard = p.hazard === 'spike' || p.hazard === 'monster';
+      if (!isHole && !isHazard) continue;
+      if (!touching(p)) continue;
+
+      if (player.shield > 0) {
+        // el escudo te salva: consume el obstáculo y rebotas
+        player.shield = 0;
+        if (isHazard) p.hazard = null;
+        if (!isHole) { player.y = p.y - player.h; doJump(JUMP); }
+      } else {
+        return gameOver(); // sin escudo: mueres
+      }
+    }
+
+    // --- aterrizaje normal (solo al caer) ---
     if (player.vy > 0 && player.jet <= 0) {
       for (const p of platforms) {
-        if (p.dead) continue;
+        if (p.dead || p.type === 'hole') continue;
         const overlapX = player.x + player.w > p.x && player.x < p.x + PLAT_W;
         const crossed = prevFoot <= p.y + PLAT_H && newFoot >= p.y;
         if (!overlapX || !crossed) continue;
-
-        if (p.type === 'hole') {
-          // agujero negro: caes y mueres
-          continue; // no rebota; sigue cayendo
-        }
-        // aterrizaje
         player.y = p.y - player.h;
-        if (p.power) hitPower(p);
+        if (p.power) takeItem(p);
         else doJump(JUMP);
-        if (p.type === 'break') p.dead = true; // se rompe tras pisarla
+        if (p.type === 'break') p.dead = true;
         break;
       }
     }
 
-    // cámara estable: solo sube, nunca baja
+    // cámara estable: solo sube
     const screenY = player.y - cameraY;
     if (screenY < H / 2) {
       const dy = H / 2 - screenY;
@@ -251,16 +291,13 @@
       if (add > 0) { score += add; scoreAcc -= add * SCORE_DIV; }
     }
 
-    // nivel / dificultad
     level = levelFor(score);
-
     spawnAbove();
     platforms = platforms.filter(p => p.y - cameraY < H + 60);
+    if (player.y - cameraY > H) return gameOver();
 
-    // muerte: caer por debajo de la pantalla
-    if (player.y - cameraY > H) gameOver();
-
-    hud.innerHTML = score + '<small>Nivel ' + level + (player.jet > 0 ? ' · 🚀' : '') + '</small>';
+    const badges = (player.jet > 0 ? ' · 🚀' : '') + (player.shield > 0 ? ' · 🛡️' : '');
+    hud.innerHTML = score + '<small>Nivel ' + level + badges + '</small>';
   }
 
   function gameOver() {
@@ -270,94 +307,131 @@
     over.style.display = 'flex';
   }
 
+  // ---------- dibujo ----------
   function drawPlatform(p) {
-    if (p.dead) return;   // rota: ya no se dibuja
+    if (p.dead) return;
     const y = p.y - cameraY;
     if (y < -40 || y > H) return;
 
     if (p.type === 'hole') {
-      // agujero negro
-      const cx = p.x + PLAT_W / 2, cy = y + PLAT_H / 2;
-      const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, PLAT_W / 2);
-      g.addColorStop(0, '#000');
-      g.addColorStop(0.7, '#2a0d3a');
-      g.addColorStop(1, 'rgba(60,20,90,0)');
+      const cx = p.x + PLAT_W/2, cy = y + PLAT_H/2;
+      const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, PLAT_W/2);
+      g.addColorStop(0, '#000'); g.addColorStop(0.7, '#2a0d3a'); g.addColorStop(1, 'rgba(60,20,90,0)');
       ctx.fillStyle = g;
       ctx.beginPath();
-      ctx.ellipse(cx, cy, PLAT_W / 2, PLAT_H + 6, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx, cy, PLAT_W/2, PLAT_H + 6, 0, 0, Math.PI*2);
       ctx.fill();
       return;
     }
 
     let top, body;
     if (p.type === 'move') { top = '#58c3f5'; body = '#2e9bd6'; }
-    else if (p.type === 'break') { top = '#e6a86b'; body = '#c77d3a'; } // frágil (marrón claro)
+    else if (p.type === 'break') { top = '#e6a86b'; body = '#c77d3a'; }
     else { top = '#3e8e41'; body = '#6b4f2a'; }
-
-    ctx.fillStyle = body;
-    ctx.fillRect(p.x, y, PLAT_W, PLAT_H);
-    ctx.fillStyle = top;
-    ctx.fillRect(p.x, y, PLAT_W, 5);
+    ctx.fillStyle = body; ctx.fillRect(p.x, y, PLAT_W, PLAT_H);
+    ctx.fillStyle = top; ctx.fillRect(p.x, y, PLAT_W, 5);
 
     if (p.type === 'break') {
-      // grietas
       ctx.strokeStyle = 'rgba(80,40,10,.6)';
       ctx.beginPath();
-      ctx.moveTo(p.x + 20, y); ctx.lineTo(p.x + 28, y + PLAT_H);
-      ctx.moveTo(p.x + 45, y); ctx.lineTo(p.x + 38, y + PLAT_H);
+      ctx.moveTo(p.x+20, y); ctx.lineTo(p.x+28, y+PLAT_H);
+      ctx.moveTo(p.x+45, y); ctx.lineTo(p.x+38, y+PLAT_H);
       ctx.stroke();
     }
 
-    // power-ups
-    if (p.power === 'spring') {
-      const sx = p.x + PLAT_W / 2;
+    // obstáculos encima
+    if (p.hazard === 'spike') {
+      ctx.fillStyle = '#9aa0a6';
+      const bx = p.x + PLAT_W/2;
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        ctx.moveTo(bx + i*12 - 6, y);
+        ctx.lineTo(bx + i*12, y - 14);
+        ctx.lineTo(bx + i*12 + 6, y);
+        ctx.fill();
+      }
+    } else if (p.hazard === 'monster') {
+      ctx.fillStyle = '#7b2fbe';
+      ctx.beginPath();
+      ctx.arc(p.x + PLAT_W/2, y - 10, 12, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(p.x + PLAT_W/2 - 6, y - 13, 4, 5);
+      ctx.fillRect(p.x + PLAT_W/2 + 2, y - 13, 4, 5);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(p.x + PLAT_W/2 - 5, y - 12, 2, 3);
+      ctx.fillRect(p.x + PLAT_W/2 + 3, y - 12, 2, 3);
+    }
+
+    // ítems
+    const ix = p.x + PLAT_W/2;
+    if (p.power === 'trampoline') {
+      ctx.fillStyle = '#1565c0'; ctx.fillRect(ix - 12, y - 6, 24, 6);
+      ctx.fillStyle = '#90caf9'; ctx.fillRect(ix - 12, y - 6, 24, 2);
+    } else if (p.power === 'spring') {
       ctx.strokeStyle = '#888'; ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.moveTo(sx - 6, y - 2);
-      ctx.lineTo(sx + 6, y - 7);
-      ctx.lineTo(sx - 6, y - 12);
-      ctx.lineTo(sx + 6, y - 17);
-      ctx.stroke();
-      ctx.lineWidth = 1;
+      ctx.moveTo(ix-6, y-2); ctx.lineTo(ix+6, y-7);
+      ctx.lineTo(ix-6, y-12); ctx.lineTo(ix+6, y-17);
+      ctx.stroke(); ctx.lineWidth = 1;
+    } else if (p.power === 'booster') {
+      ctx.fillStyle = '#ff6d00';
+      ctx.beginPath();
+      ctx.moveTo(ix, y - 20); ctx.lineTo(ix - 8, y); ctx.lineTo(ix + 8, y);
+      ctx.fill();
+      ctx.fillStyle = '#ffd54f'; ctx.fillRect(ix - 3, y - 12, 6, 6);
     } else if (p.power === 'jetpack') {
-      const jx = p.x + PLAT_W / 2 - 6;
-      ctx.fillStyle = '#d33';
-      ctx.fillRect(jx, y - 20, 12, 18);
+      ctx.fillStyle = '#d33'; ctx.fillRect(ix - 6, y - 20, 12, 18);
       ctx.fillStyle = '#ffb300';
       ctx.beginPath();
-      ctx.moveTo(jx + 2, y - 2);
-      ctx.lineTo(jx + 6, y + 6);
-      ctx.lineTo(jx + 10, y - 2);
+      ctx.moveTo(ix - 4, y - 2); ctx.lineTo(ix, y + 6); ctx.lineTo(ix + 4, y - 2);
       ctx.fill();
+    } else if (p.power === 'shield') {
+      ctx.strokeStyle = '#00bcd4'; ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(ix, y - 10, 10, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(0,188,212,.25)';
+      ctx.fill(); ctx.lineWidth = 1;
     }
   }
 
   function drawPlayer() {
     const y = player.y - cameraY;
-    // llama del jetpack
     if (player.jet > 0) {
       ctx.fillStyle = '#ffb300';
       ctx.beginPath();
       ctx.moveTo(player.x + 10, y + player.h);
-      ctx.lineTo(player.x + player.w / 2, y + player.h + 18 + Math.random() * 8);
+      ctx.lineTo(player.x + player.w/2, y + player.h + 18 + Math.random()*8);
       ctx.lineTo(player.x + player.w - 10, y + player.h);
       ctx.fill();
     }
     ctx.fillStyle = '#5bc236';
     ctx.beginPath();
-    ctx.ellipse(player.x + player.w / 2, y + player.h / 2, player.w / 2, player.h / 2, 0, 0, Math.PI * 2);
+    ctx.ellipse(player.x + player.w/2, y + player.h/2, player.w/2, player.h/2, 0, 0, Math.PI*2);
     ctx.fill();
     ctx.fillStyle = '#fff';
     const ex = player.face > 0 ? 8 : -8;
     ctx.beginPath();
-    ctx.arc(player.x + player.w / 2 + ex - 5, y + 14, 5, 0, Math.PI * 2);
-    ctx.arc(player.x + player.w / 2 + ex + 5, y + 14, 5, 0, Math.PI * 2);
+    ctx.arc(player.x + player.w/2 + ex - 5, y + 14, 5, 0, Math.PI*2);
+    ctx.arc(player.x + player.w/2 + ex + 5, y + 14, 5, 0, Math.PI*2);
     ctx.fill();
     ctx.fillStyle = '#222';
     ctx.beginPath();
-    ctx.arc(player.x + player.w / 2 + ex - 4, y + 15, 2, 0, Math.PI * 2);
-    ctx.arc(player.x + player.w / 2 + ex + 6, y + 15, 2, 0, Math.PI * 2);
+    ctx.arc(player.x + player.w/2 + ex - 4, y + 15, 2, 0, Math.PI*2);
+    ctx.arc(player.x + player.w/2 + ex + 6, y + 15, 2, 0, Math.PI*2);
     ctx.fill();
+    // burbuja de escudo
+    if (player.shield > 0) {
+      const blink = player.shield < 90 && (player.shield >> 3) % 2 === 0;
+      if (!blink) {
+        ctx.strokeStyle = '#00bcd4'; ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(player.x + player.w/2, y + player.h/2, player.w/2 + 7, 0, Math.PI*2);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(0,188,212,.12)'; ctx.fill(); ctx.lineWidth = 1;
+      }
+    }
   }
 
   function draw() {
@@ -366,11 +440,7 @@
     drawPlayer();
   }
 
-  function loop() {
-    update();
-    draw();
-    requestAnimationFrame(loop);
-  }
+  function loop() { update(); draw(); requestAnimationFrame(loop); }
 
   // controles
   addEventListener('keydown', e => {
@@ -395,7 +465,6 @@
   }
 
   document.getElementById('retry').addEventListener('click', reset);
-
   reset();
   loop();
 })();
