@@ -81,7 +81,7 @@
 <body>
   <div id="wrap"><canvas id="game"></canvas></div>
   <div id="hud">0<small>Nivel 1</small></div>
-  <div id="hint">Flechas / A-D o inclina el móvil</div>
+  <div id="hint">Moverse: flechas / A-D · Disparar huevo: Espacio o W (móvil: toca arriba)</div>
   <div id="over">
     <h1>Game Over</h1>
     <p id="finalScore">Puntos: 0</p>
@@ -178,7 +178,21 @@
   const SPIKE_W = 24;
   let monsters = [], monsterCooldown = 0;
   function monsterChance(lvl) { return lvl >= 2 ? Math.min((lvl - 1) * 0.06, 0.4) : 0; }
-  const MONSTER_R = { blob: 15, bat: 14, eye: 15, ufo: 18 };
+  const MONSTER_R = { blob: 21, bat: 20, eye: 21, ufo: 25 };
+  const MONSTER_SCALE = 1.45;   // los bichos se dibujan más grandes
+
+  // ---------- huevos (disparo) ----------
+  let eggs = [], shootCd = 0, poofs = [];
+  function shoot() {
+    if (!running || shootCd > 0) return;
+    eggs.push({ x: player.x + player.w / 2, y: player.y + 4, vy: -11 });
+    shootCd = 14;
+  }
+  function killFx(m, text) {
+    m.dead = true;
+    poofs.push({ x: m.x, y: m.y, t: 0 });
+    popups.push({ text, color: '#ff9800', x: m.x, y: m.y - cameraY - 20, t: 60 });
+  }
 
   function maybeMonster(y, lvl) {
     if (monsterCooldown > 0) { monsterCooldown--; return; }
@@ -230,6 +244,7 @@
     score = 0; scoreAcc = 0; level = 1; cameraY = 0;
     itemCooldown = 0;
     monsters = []; monsterCooldown = 0;
+    eggs = []; poofs = []; shootCd = 0;
     running = true; over.style.display = 'none';
   }
 
@@ -324,13 +339,26 @@
       if (m.dead || !hitsPlayer(m.x, m.y, m.r)) continue;
       if (player.vy > 0 && player.y + player.h < m.y) {
         // le caes encima: lo aplastas y rebotas
-        m.dead = true; doJump(JUMP); popText('¡Plaf!', '#ff9800');
+        killFx(m, '¡Plaf!'); doJump(JUMP);
       } else if (player.shield > 0) {
         m.dead = true; player.shield = 0; popText('¡Salvado!', '#00e5ff');
       } else {
         return gameOver();
       }
     }
+    // huevos: suben y matan al bicho que tocan
+    if (shootCd > 0) shootCd--;
+    for (const e of eggs) {
+      e.y += e.vy;
+      for (const m of monsters) {
+        if (!m.dead && (e.x - m.x) ** 2 + (e.y - m.y) ** 2 < (m.r + 6) ** 2) {
+          killFx(m, '¡Toma!'); e.dead = true; break;
+        }
+      }
+    }
+    eggs = eggs.filter(e => !e.dead && e.y - cameraY > -30);
+    for (const pf of poofs) pf.t++;
+    poofs = poofs.filter(pf => pf.t < 25);
     monsters = monsters.filter(m => !m.dead && m.y - cameraY < H + 60);
 
     // --- aterrizaje normal (solo al caer) ---
@@ -412,7 +440,15 @@
     if (zone >= 3) {   // fondos oscuros: halo claro por fuera
       ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 7; outline(); ctx.stroke();
     }
-    ctx.strokeStyle = zone === 2 ? '#1a237e' : '#111'; ctx.lineWidth = 4; outline(); ctx.stroke();
+    if (zone === 2) {   // nube: sombra debajo + borde grueso para que destaque
+      ctx.save(); ctx.translate(0, 5);
+      ctx.fillStyle = 'rgba(10,20,60,.35)'; outline(); ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = '#0d1b4a'; ctx.lineWidth = 6;
+    } else {
+      ctx.strokeStyle = '#111'; ctx.lineWidth = 4;
+    }
+    outline(); ctx.stroke();
     ctx.lineWidth = 1;
     if (zone === 2) {
       // nube: bultos blancos
@@ -421,8 +457,8 @@
       ctx.beginPath();
       for (let i = 0; i < 3; i++) ctx.arc(x + w * (0.2 + i * 0.3), y + 3, w * 0.13, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = 'rgba(144,202,249,.5)';
-      rr(x + 3, y + PLAT_H - 4, w - 6, 3, 2); ctx.fill();
+      ctx.fillStyle = '#90a4ae';
+      rr(x + 3, y + PLAT_H - 5, w - 6, 4, 2); ctx.fill();
     } else if (zone === 3) {
       // hielo translúcido con brillo
       ctx.fillStyle = sk.body; ctx.globalAlpha *= 0.9;
@@ -900,8 +936,8 @@
     // nubes
     const ca = Math.max(0.6 * band(s, -1, 0, 0, 700), band(s, 200, 700, 2200, 3000));
     if (ca > 0) {
-      ctx.globalAlpha = ca * 0.9;
-      ctx.fillStyle = '#fff';
+      ctx.globalAlpha = ca * 0.35;   // nubes de fondo suaves: no se confunden con plataformas
+      ctx.fillStyle = '#e3f2fd';
       for (const c of CLOUDS) {
         const cy = wrapY(c.y, 0.3, H + 80);
         const r = 18 * c.s;
@@ -937,92 +973,185 @@
   }
 
   // ---------- dibujo de bichos ----------
+  function shade(x, y, r, c1, c2) {
+    const g = ctx.createRadialGradient(x, y, 1, x, y, r);
+    g.addColorStop(0, c1); g.addColorStop(1, c2);
+    return g;
+  }
+  // ojo con pupila que mira al pollo
+  function eyeball(ex, ey, r, m, iris) {
+    const sx = m.x + ex * MONSTER_SCALE, sy = m.y + ey * MONSTER_SCALE;
+    const a = Math.atan2(player.y + player.h / 2 - sy, player.x + player.w / 2 - sx);
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex, ey, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    const px = ex + Math.cos(a) * r * 0.4, py = ey + Math.sin(a) * r * 0.4;
+    if (iris) { ctx.fillStyle = iris; ctx.beginPath(); ctx.arc(px, py, r * 0.62, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(px, py, r * 0.36, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px - r * 0.15, py - r * 0.2, r * 0.13, 0, Math.PI * 2); ctx.fill();
+  }
+
   function drawMonster(m) {
     const x = m.x, y = m.y - cameraY;
-    if (y < -40 || y > H + 40) return;
+    if (y < -60 || y > H + 60) return;
     // halo rojo de peligro: se ve en cualquier fondo
-    const dg = ctx.createRadialGradient(x, y, 4, x, y, m.r + 16);
-    dg.addColorStop(0, 'rgba(255,40,40,.45)'); dg.addColorStop(1, 'rgba(255,40,40,0)');
-    ctx.fillStyle = dg; ctx.beginPath(); ctx.arc(x, y, m.r + 16, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = shade(x, y, m.r + 18, 'rgba(255,40,40,.45)', 'rgba(255,40,40,0)');
+    ctx.beginPath(); ctx.arc(x, y, m.r + 18, 0, Math.PI * 2); ctx.fill();
 
-    ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
-    const look = Math.sign(player.x + player.w / 2 - x);   // los ojos te siguen
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(MONSTER_SCALE, MONSTER_SCALE);
+    ctx.strokeStyle = '#111'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
 
     if (m.kind === 'blob') {
-      // babosa verde con dientes
-      ctx.fillStyle = '#7cb342';
+      // BABOSA: gelatina verde que se aplasta, ojos grandes, boca con dientes, baba
+      const sq = 1 + Math.sin(m.t * 0.12) * 0.07;
+      ctx.save(); ctx.scale(1 / sq, sq);
+      ctx.fillStyle = shade(-5, -8, 22, '#ccff90', '#33691e');
       ctx.beginPath();
-      ctx.moveTo(x - 16, y + 10);
-      ctx.quadraticCurveTo(x - 18, y - 16, x, y - 16);
-      ctx.quadraticCurveTo(x + 18, y - 16, x + 16, y + 10);
-      for (let i = 0; i < 4; i++) ctx.quadraticCurveTo(x + 12 - i * 8, y + 16, x + 8 - i * 8, y + 10);
+      ctx.moveTo(-15, 10);
+      ctx.bezierCurveTo(-19, -6, -10, -17, 0, -17);
+      ctx.bezierCurveTo(10, -17, 19, -6, 15, 10);
+      ctx.quadraticCurveTo(11, 14, 7.5, 10);
+      ctx.quadraticCurveTo(4, 14, 0, 10);
+      ctx.quadraticCurveTo(-4, 14, -7.5, 10);
+      ctx.quadraticCurveTo(-11, 14, -15, 10);
       ctx.closePath(); ctx.fill(); ctx.stroke();
-      eyes(x - 6, y - 5, x + 6, y - 5, 5, look);
-      ctx.strokeStyle = '#111';
-      ctx.beginPath(); ctx.moveTo(x - 11, y - 12); ctx.lineTo(x - 2, y - 9); ctx.moveTo(x + 11, y - 12); ctx.lineTo(x + 2, y - 9); ctx.stroke();
-      ctx.fillStyle = '#3e2723'; ctx.fillRect(x - 7, y + 3, 14, 5);
-      ctx.fillStyle = '#fff'; ctx.fillRect(x - 6, y + 3, 3, 3); ctx.fillRect(x + 3, y + 3, 3, 3);
-    } else if (m.kind === 'bat') {
-      // murciélago morado que aletea
-      const f = Math.sin(m.t * 0.35) * 8;
-      ctx.fillStyle = '#5e35b1';
-      for (const s of [-1, 1]) {
-        ctx.beginPath();
-        ctx.moveTo(x + s * 6, y - 2);
-        ctx.lineTo(x + s * 26, y - 10 - f);
-        ctx.lineTo(x + s * 20, y + 2 - f * 0.3);
-        ctx.lineTo(x + s * 14, y - 2);
-        ctx.lineTo(x + s * 10, y + 6);
-        ctx.closePath(); ctx.fill(); ctx.stroke();
-      }
-      ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(x - 8, y - 6); ctx.lineTo(x - 6, y - 16); ctx.lineTo(x - 2, y - 9);
-      ctx.moveTo(x + 8, y - 6); ctx.lineTo(x + 6, y - 16); ctx.lineTo(x + 2, y - 9); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#ff1744';
-      ctx.beginPath(); ctx.arc(x - 4, y - 2, 2.5, 0, Math.PI * 2); ctx.arc(x + 4, y - 2, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.55)';
+      ctx.beginPath(); ctx.ellipse(-8, -10, 4, 2.5, -0.6, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      eyeball(-6, -5, 4.5, m, '#c62828');
+      eyeball(6, -5, 4.5, m, '#c62828');
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(-11, -12); ctx.lineTo(-2, -9); ctx.moveTo(11, -12); ctx.lineTo(2, -9); ctx.stroke();
+      ctx.lineWidth = 1.5;
+      ctx.fillStyle = '#3e0d0d';
+      ctx.beginPath(); ctx.moveTo(-8, 2); ctx.quadraticCurveTo(0, 10, 8, 2); ctx.closePath(); ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.moveTo(x - 4, y + 4); ctx.lineTo(x - 2, y + 9); ctx.lineTo(x, y + 4);
-      ctx.moveTo(x, y + 4); ctx.lineTo(x + 2, y + 9); ctx.lineTo(x + 4, y + 4); ctx.fill();
-    } else if (m.kind === 'eye') {
-      // ojo volador con tentáculos
-      ctx.strokeStyle = '#ad1457'; ctx.lineWidth = 3;
-      for (let i = -1; i <= 1; i++) {
-        ctx.beginPath(); ctx.moveTo(x + i * 7, y + 12);
-        ctx.quadraticCurveTo(x + i * 10 + Math.sin(m.t * 0.1 + i) * 5, y + 20, x + i * 8, y + 27);
-        ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-6, 2.5); ctx.lineTo(-4.5, 5.5); ctx.lineTo(-3, 3); ctx.moveTo(3, 3); ctx.lineTo(4.5, 5.5); ctx.lineTo(6, 2.5); ctx.fill();
+      ctx.fillStyle = 'rgba(178,255,89,.8)';
+      ctx.beginPath(); ctx.ellipse(5, 9 + (m.t % 40) * 0.12, 1.3, 2.2, 0, 0, Math.PI * 2); ctx.fill();
+    } else if (m.kind === 'bat') {
+      // MURCIÉLAGO: alas con huesos que aletean, ojos amarillos, colmillos
+      const flap = Math.sin(m.t * 0.35);
+      for (const s of [-1, 1]) {
+        ctx.save();
+        ctx.scale(s, 1);
+        ctx.rotate(-flap * 0.45);
+        ctx.fillStyle = shade(14, -4, 18, '#7e57c2', '#311b92');
+        ctx.beginPath();
+        ctx.moveTo(6, -4);
+        ctx.lineTo(16, -14); ctx.lineTo(28, -8);
+        ctx.quadraticCurveTo(25, -2, 27, 4);
+        ctx.quadraticCurveTo(21, 1, 19, 6);
+        ctx.quadraticCurveTo(14, 2, 11, 7);
+        ctx.quadraticCurveTo(9, 2, 6, 4);
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = 'rgba(20,0,40,.7)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(16, -14); ctx.lineTo(27, 4); ctx.moveTo(16, -14); ctx.lineTo(19, 6); ctx.moveTo(16, -14); ctx.lineTo(11, 7); ctx.stroke();
+        ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
+        ctx.restore();
       }
-      ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
-      ctx.fillStyle = '#fafafa';
-      ctx.beginPath(); ctx.arc(x, y, 15, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.strokeStyle = '#e57373'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(x - 13, y - 4); ctx.lineTo(x - 7, y - 2); ctx.moveTo(x + 12, y + 6); ctx.lineTo(x + 7, y + 3); ctx.stroke();
-      const dx = Math.max(-5, Math.min(5, (player.x + player.w / 2 - x) * 0.05));
-      const dy = Math.max(-5, Math.min(5, (player.y + player.h / 2 - m.y) * 0.05));
-      ctx.fillStyle = '#d81b60'; ctx.beginPath(); ctx.arc(x + dx, y + dy, 7, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(x + dx, y + dy, 3.5, 0, Math.PI * 2); ctx.fill();
-    } else if (m.kind === 'ufo') {
-      // ovni con alien
-      ctx.fillStyle = 'rgba(178,255,89,.85)';
-      ctx.beginPath(); ctx.arc(x, y - 5, 11, Math.PI, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#76ff03';
-      ctx.beginPath(); ctx.arc(x, y - 7, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = shade(-3, -4, 14, '#9575cd', '#311b92');
+      ctx.beginPath();
+      ctx.moveTo(-9, -6); ctx.lineTo(-8, -17); ctx.lineTo(-3, -10);
+      ctx.lineTo(3, -10); ctx.lineTo(8, -17); ctx.lineTo(9, -6);
+      ctx.quadraticCurveTo(11, 8, 0, 11);
+      ctx.quadraticCurveTo(-11, 8, -9, -6);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffd600';
+      ctx.beginPath(); ctx.ellipse(-4, -3, 3.2, 3.8, 0, 0, Math.PI * 2); ctx.ellipse(4, -3, 3.2, 3.8, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#111';
-      ctx.beginPath(); ctx.ellipse(x - 2, y - 8, 1.5, 2.5, 0, 0, Math.PI * 2); ctx.ellipse(x + 2, y - 8, 1.5, 2.5, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#90a4ae';
-      ctx.beginPath(); ctx.ellipse(x, y, 22, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillRect(-4.6, -6, 1.2, 6); ctx.fillRect(3.4, -6, 1.2, 6);
+      ctx.fillStyle = '#fff'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(-3.5, 4); ctx.lineTo(-2, 9); ctx.lineTo(-0.5, 4); ctx.moveTo(0.5, 4); ctx.lineTo(2, 9); ctx.lineTo(3.5, 4); ctx.fill(); ctx.stroke();
+    } else if (m.kind === 'eye') {
+      // OJO VOLADOR: tentáculos con ventosas, venas, iris y párpado que parpadea
+      ctx.lineCap = 'round';
       for (let i = 0; i < 4; i++) {
-        ctx.fillStyle = (Math.floor(m.t / 8) + i) % 2 ? '#ffeb3b' : '#ff5722';
-        ctx.beginPath(); ctx.arc(x - 13 + i * 9, y + 1, 2, 0, Math.PI * 2); ctx.fill();
+        const bx = -9 + i * 6, w = Math.sin(m.t * 0.12 + i * 1.3) * 5;
+        ctx.strokeStyle = '#111'; ctx.lineWidth = 6;
+        ctx.beginPath(); ctx.moveTo(bx, 10); ctx.quadraticCurveTo(bx + w, 18, bx - w * 0.6, 26); ctx.stroke();
+        ctx.strokeStyle = '#8e24aa'; ctx.lineWidth = 3.5;
+        ctx.beginPath(); ctx.moveTo(bx, 10); ctx.quadraticCurveTo(bx + w, 18, bx - w * 0.6, 26); ctx.stroke();
+      }
+      ctx.lineCap = 'butt'; ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
+      ctx.fillStyle = shade(-5, -6, 18, '#ffffff', '#f48fb1');
+      ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#e53935'; ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(-14, -3); ctx.quadraticCurveTo(-10, -1, -8, -4);
+      ctx.moveTo(13, 5); ctx.quadraticCurveTo(10, 3, 9, 6);
+      ctx.moveTo(-6, 13); ctx.quadraticCurveTo(-5, 9, -2, 10);
+      ctx.stroke();
+      ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5;
+      const sx = m.x, sy = m.y;
+      const a = Math.atan2(player.y + player.h / 2 - sy, player.x + player.w / 2 - sx);
+      const ix = Math.cos(a) * 5, iy = Math.sin(a) * 5;
+      ctx.fillStyle = shade(ix - 2, iy - 2, 8, '#ffcc80', '#e65100');
+      ctx.beginPath(); ctx.arc(ix, iy, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#111'; ctx.beginPath(); ctx.ellipse(ix, iy, 2, 4.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ix - 2.5, iy - 3, 1.5, 0, Math.PI * 2); ctx.fill();
+      // párpado (parpadea de vez en cuando)
+      const blink = (m.t % 160) < 8;
+      ctx.fillStyle = '#6a1b9a'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 15.5, Math.PI, Math.PI * 2);
+      ctx.quadraticCurveTo(0, blink ? 16 : -6, -15.5, 0);
+      ctx.fill(); ctx.stroke();
+    } else if (m.kind === 'ufo') {
+      // OVNI: rayo, cúpula de cristal con alien, platillo metálico con luces
+      const beam = 0.15 + Math.sin(m.t * 0.1) * 0.08;
+      ctx.fillStyle = 'rgba(255,241,118,' + beam + ')';
+      ctx.beginPath(); ctx.moveTo(-8, 5); ctx.lineTo(8, 5); ctx.lineTo(16, 34); ctx.lineTo(-16, 34); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = shade(0, -6, 6, '#b9f6ca', '#2e7d32');
+      ctx.beginPath(); ctx.ellipse(0, -7, 5.5, 6, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#111';
+      ctx.beginPath(); ctx.ellipse(-2.3, -7.5, 1.7, 2.8, -0.4, 0, Math.PI * 2); ctx.ellipse(2.3, -7.5, 1.7, 2.8, 0.4, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#2e7d32'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(-2, -12.5); ctx.lineTo(-4, -16); ctx.moveTo(2, -12.5); ctx.lineTo(4, -16); ctx.stroke();
+      ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
+      ctx.fillStyle = 'rgba(128,222,234,.45)';
+      ctx.beginPath(); ctx.arc(0, -3, 12, Math.PI, Math.PI * 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,.7)';
+      ctx.beginPath(); ctx.ellipse(-6, -9, 2, 4, -0.6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = shade(-6, -4, 26, '#fafafa', '#455a64');
+      ctx.beginPath(); ctx.ellipse(0, 0, 22, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#37474f';
+      ctx.beginPath(); ctx.ellipse(0, 4, 10, 3, 0, 0, Math.PI); ctx.fill(); ctx.stroke();
+      for (let i = 0; i < 5; i++) {
+        ctx.fillStyle = (Math.floor(m.t / 8) + i) % 2 ? '#ffea00' : '#ff3d00';
+        ctx.beginPath(); ctx.arc(-14 + i * 7, 1, 1.8, 0, Math.PI * 2); ctx.fill();
       }
     }
+    ctx.restore();
     ctx.lineWidth = 1;
   }
 
-  function eyes(x1, y1, x2, y2, r, look) {
-    ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(x1, y1, r, 0, Math.PI * 2); ctx.arc(x2, y2, r, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#111';
-    ctx.beginPath(); ctx.arc(x1 + look * 2, y1 + 1, r * 0.45, 0, Math.PI * 2); ctx.arc(x2 + look * 2, y2 + 1, r * 0.45, 0, Math.PI * 2); ctx.fill();
+  function drawEggs() {
+    for (const e of eggs) {
+      const y = e.y - cameraY;
+      ctx.fillStyle = '#fffde7'; ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.ellipse(e.x, y, 5, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,.9)';
+      ctx.beginPath(); ctx.ellipse(e.x - 1.5, y - 3, 1.2, 2, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    // nube de humo al morir un bicho
+    for (const pf of poofs) {
+      const y = pf.y - cameraY, k = pf.t / 25;
+      ctx.globalAlpha = 1 - k;
+      ctx.fillStyle = '#eeeeee'; ctx.strokeStyle = '#555'; ctx.lineWidth = 2;
+      for (let i = 0; i < 6; i++) {
+        const a = i * Math.PI / 3;
+        ctx.beginPath(); ctx.arc(pf.x + Math.cos(a) * 26 * k, y + Math.sin(a) * 26 * k, 9 * (1 - k * 0.5), 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+      }
+      ctx.fillStyle = '#ffd600';
+      for (let i = 0; i < 6; i++) {
+        const a = i * Math.PI / 3 + 0.5;
+        ctx.beginPath(); ctx.arc(pf.x + Math.cos(a) * 38 * k, y + Math.sin(a) * 38 * k, 2.5, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.lineWidth = 1;
   }
 
   // ---------- pollo ----------
@@ -1110,6 +1239,7 @@
     drawBackground();
     for (const p of platforms) drawPlatform(p);
     for (const m of monsters) drawMonster(m);
+    drawEggs();
     drawPlayer();
     drawPopups();
   }
@@ -1118,6 +1248,7 @@
 
   // controles
   addEventListener('keydown', e => {
+    if (e.key === ' ' || e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') { e.preventDefault(); shoot(); }
     if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
     if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
   });
@@ -1132,10 +1263,14 @@
   addEventListener('touchmove', handleTouch);
   addEventListener('touchend', () => { keys.left = keys.right = false; });
   function handleTouch(e) {
-    const t = e.touches[0];
-    if (!t) return;
-    keys.left = t.clientX < innerWidth / 2;
-    keys.right = t.clientX >= innerWidth / 2;
+    keys.left = keys.right = false;
+    for (const t of e.touches) {
+      if (t.clientY < innerHeight * 0.35) {           // arriba: disparar
+        if (e.type === 'touchstart') shoot();
+      } else {                                         // abajo: moverse
+        if (t.clientX < innerWidth / 2) keys.left = true; else keys.right = true;
+      }
+    }
   }
 
   document.getElementById('retry').addEventListener('click', reset);
