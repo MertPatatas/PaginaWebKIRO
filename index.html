@@ -12,6 +12,9 @@
     font-family: system-ui, Arial, sans-serif;
     overflow: hidden;
     touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
   }
   #wrap {
     display: flex;
@@ -223,11 +226,13 @@
 
   // ---------- huevos (disparo) ----------
   let eggs = [], shootCd = 0, poofs = [];
-  function shoot() {
+  const TAP_CD = 10;    // pulsando una y otra vez: un poco más rápido
+  const HOLD_CD = 24;   // manteniendo: ~2,5 huevos por segundo (no es una metralleta)
+  function shoot(held) {
     if (!running || shootCd > 0) return;
     // el huevo suma la subida del pollo: nunca se queda atrás
     eggs.push({ x: player.x + player.w / 2, y: player.y + 4, vy: -11 + Math.min(0, player.vy) });
-    shootCd = 12;
+    shootCd = held ? HOLD_CD : TAP_CD;
   }
   function killFx(m, text) {
     m.dead = true;
@@ -389,7 +394,7 @@
     }
     // huevos: suben y matan al bicho que tocan
     if (shootCd > 0) shootCd--;
-    if (keys.shoot) shoot();
+    if (keys.shoot) shoot(true);
     for (const e of eggs) {
       e.y += e.vy;
       for (const m of monsters) {
@@ -1296,7 +1301,10 @@
       if (e.key === 'Enter' || e.key === ' ') startGame();
       return;
     }
-    if (isShootKey(e.key)) keys.shoot = true;            // mantener = disparo a ritmo fijo
+    if (isShootKey(e.key)) {
+      if (!e.repeat && !keys.shoot) shoot(false);        // pulsación nueva: dispara ya
+      keys.shoot = true;                                 // mantener: sigue disparando más despacio
+    }
     if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
     if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
   });
@@ -1309,27 +1317,34 @@
   addEventListener('deviceorientation', e => {
     if (e.gamma != null) tiltX = Math.max(-1, Math.min(1, e.gamma / 25));
   });
-  addEventListener('touchstart', handleTouch);
-  addEventListener('touchmove', handleTouch);
-  addEventListener('touchend', handleTouch);
-  addEventListener('touchcancel', handleTouch);
+  // passive:false + preventDefault: una pulsación larga ya no cancela el toque ni abre menús
+  for (const ev of ['touchstart', 'touchmove', 'touchend', 'touchcancel'])
+    addEventListener(ev, handleTouch, { passive: false });
   function handleTouch(e) {
+    if (e.target.closest && e.target.closest('button')) return;   // deja funcionar los botones
+    e.preventDefault();
+    const wasShooting = keys.shoot;
     keys.left = keys.right = keys.shoot = false;
     for (const t of e.touches) {
-      if (t.clientY < innerHeight * 0.35) keys.shoot = true;   // arriba: disparar (mantener = ráfaga)
+      if (t.clientY < innerHeight * 0.35) keys.shoot = true;   // arriba: disparar
       else if (t.clientX < innerWidth / 2) keys.left = true;   // abajo: moverse
       else keys.right = true;
     }
+    if (keys.shoot && !wasShooting) shoot(false);
   }
 
   const startScreen = document.getElementById('start');
   function startGame() {
     startScreen.style.display = 'none';
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
     keys.left = keys.right = keys.shoot = false;
     reset();
   }
   document.getElementById('play').addEventListener('click', startGame);
-  document.getElementById('retry').addEventListener('click', reset);
+  document.getElementById('retry').addEventListener('click', () => {
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    reset();
+  });
   reset();
   running = false;   // espera en la pantalla de inicio
   loop();
