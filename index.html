@@ -162,9 +162,11 @@
     if (player.x + player.w < 0) player.x = W;
     if (player.x > W) player.x = -player.w;
 
-    // gravity
+    // gravity (remember previous foot position for swept collision)
+    const prevFoot = player.y + player.h;
     player.vy += GRAVITY;
     player.y += player.vy;
+    const newFoot = player.y + player.h;
 
     // moving platforms
     for (const p of platforms) {
@@ -174,22 +176,24 @@
       }
     }
 
-    // collision (only when falling)
+    // collision: only when falling, using a swept check so fast falls
+    // can't tunnel through a thin platform between frames
     if (player.vy > 0) {
       for (const p of platforms) {
-        if (player.x + player.w > p.x &&
-            player.x < p.x + PLAT_W &&
-            player.y + player.h > p.y &&
-            player.y + player.h < p.y + PLAT_H + player.vy) {
+        const overlapX = player.x + player.w > p.x && player.x < p.x + PLAT_W;
+        // foot crossed the platform's top edge this frame
+        const crossed = prevFoot <= p.y + PLAT_H && newFoot >= p.y;
+        if (overlapX && crossed) {
+          player.y = p.y - player.h; // land exactly on top
           player.vy = JUMP;
+          break;
         }
       }
     }
 
-    // camera follows up
+    // camera follows up (does NOT move the player — only the world scrolls)
     if (player.y < H / 2) {
       const dy = H / 2 - player.y;
-      player.y = H / 2;
       cameraY -= dy;
       score += Math.round(dy);
     }
