@@ -247,8 +247,9 @@
     player.y += player.vy;
     const newFoot = player.y + player.h;
 
-    // plataformas móviles
+    // plataformas móviles + animación de rotura
     for (const p of platforms) {
+      if (p.breakT > 0) p.breakT++;
       if (p.type === 'move' && !p.dead) {
         p.x += p.dir * p.vx;
         if (p.x < 0 || p.x + PLAT_W > W) p.dir *= -1;
@@ -283,7 +284,7 @@
         player.y = p.y - player.h;
         if (p.power) takeItem(p);
         else doJump(JUMP);
-        if (p.type === 'break') p.dead = true;
+        if (p.type === 'break') { p.dead = true; p.breakT = 1; }
         break;
       }
     }
@@ -314,11 +315,121 @@
     over.style.display = 'flex';
   }
 
+  // ---------- terreno según la altura ----------
+  // granja, montañas, cielo, estratosfera, espacio, universo
+  const SKINS = [
+    { body: '#6b4f2a', top: '#3e8e41', crack: 'rgba(40,20,5,.7)' },   // tierra con hierba
+    { body: '#78909c', top: '#eceff1', crack: 'rgba(30,40,50,.7)' },  // roca con nieve
+    { body: '#ffffff', top: '#e3f2fd', crack: 'rgba(120,140,170,.8)' }, // nube
+    { body: '#4fc3f7', top: '#e1f5fe', crack: 'rgba(255,255,255,.9)' }, // hielo
+    { body: '#546e7a', top: '#b0bec5', crack: 'rgba(255,80,80,.8)' },   // metal
+    { body: '#311b92', top: '#e040fb', crack: 'rgba(255,255,255,.9)' }, // cristal neón
+  ];
+  function zoneIdx(s) { let i = 0; ZONES.forEach((z, k) => { if (s >= z.at) i = k; }); return i; }
+
+  function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // dibuja una plataforma de ancho w con la piel de su zona
+  function drawSlab(x, y, w, type, zone) {
+    const sk = SKINS[zone];
+    if (zone === 2) {
+      // nube: bultos blancos
+      ctx.fillStyle = sk.body;
+      rr(x, y + 2, w, PLAT_H - 2, 7); ctx.fill();
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) ctx.arc(x + w * (0.2 + i * 0.3), y + 3, w * 0.13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(144,202,249,.5)';
+      rr(x + 3, y + PLAT_H - 4, w - 6, 3, 2); ctx.fill();
+    } else if (zone === 3) {
+      // hielo translúcido con brillo
+      ctx.fillStyle = sk.body; ctx.globalAlpha *= 0.9;
+      rr(x, y, w, PLAT_H, 3); ctx.fill();
+      ctx.globalAlpha /= 0.9;
+      ctx.fillStyle = sk.top; ctx.fillRect(x + 2, y + 1, w - 4, 4);
+      ctx.fillStyle = 'rgba(255,255,255,.7)';
+      ctx.fillRect(x + w * 0.15, y + 6, w * 0.12, 2);
+      ctx.fillRect(x + w * 0.6, y + 8, w * 0.2, 2);
+    } else if (zone === 4) {
+      // metal con luces
+      ctx.fillStyle = sk.body; rr(x, y, w, PLAT_H, 2); ctx.fill();
+      ctx.fillStyle = sk.top; ctx.fillRect(x, y, w, 4);
+      ctx.fillStyle = '#37474f';
+      for (let i = 1; i < 4; i++) ctx.fillRect(x + w * i / 4, y + 4, 1, PLAT_H - 4);
+      const on = Math.floor(frame / 20) % 2 === 0;
+      ctx.fillStyle = on ? '#76ff03' : '#33691e';
+      ctx.fillRect(x + 4, y + 7, 4, 3); ctx.fillRect(x + w - 8, y + 7, 4, 3);
+    } else if (zone === 5) {
+      // cristal neón que cambia de color
+      const hue = (frame * 2 + x) % 360;
+      ctx.fillStyle = sk.body; rr(x, y, w, PLAT_H, 4); ctx.fill();
+      ctx.strokeStyle = 'hsl(' + hue + ',100%,65%)'; ctx.lineWidth = 2;
+      rr(x + 1, y + 1, w - 2, PLAT_H - 2, 4); ctx.stroke(); ctx.lineWidth = 1;
+    } else {
+      // granja (tierra + hierba) o montaña (roca + nieve)
+      ctx.fillStyle = sk.body; rr(x, y, w, PLAT_H, 3); ctx.fill();
+      ctx.fillStyle = sk.top; rr(x, y, w, 5, 2); ctx.fill();
+      ctx.beginPath();
+      for (let i = 4; i < w - 4; i += 9) {
+        ctx.moveTo(x + i, y + 5); ctx.lineTo(x + i + 3, y + (zone === 0 ? 9 : 8)); ctx.lineTo(x + i + 6, y + 5);
+      }
+      ctx.fill();
+    }
+
+    // marcas de tipo (iguales en todas las zonas)
+    if (type === 'move') {
+      // flechas amarillas: se mueve
+      ctx.fillStyle = '#ffd600';
+      ctx.beginPath();
+      ctx.moveTo(x + 2, y + PLAT_H / 2); ctx.lineTo(x + 8, y + 3); ctx.lineTo(x + 8, y + PLAT_H - 3);
+      ctx.moveTo(x + w - 2, y + PLAT_H / 2); ctx.lineTo(x + w - 8, y + 3); ctx.lineTo(x + w - 8, y + PLAT_H - 3);
+      ctx.fill();
+    } else if (type === 'break') {
+      // grietas: se rompe
+      ctx.strokeStyle = sk.crack; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + w * 0.28, y); ctx.lineTo(x + w * 0.38, y + 7); ctx.lineTo(x + w * 0.32, y + PLAT_H);
+      ctx.moveTo(x + w * 0.66, y); ctx.lineTo(x + w * 0.58, y + 6); ctx.lineTo(x + w * 0.64, y + PLAT_H);
+      ctx.stroke(); ctx.lineWidth = 1;
+    }
+  }
+
   // ---------- dibujo ----------
   function drawPlatform(p) {
-    if (p.dead) return;
     const y = p.y - cameraY;
-    if (y < -40 || y > H) return;
+    if (y < -40 || y > H + 40) return;
+    const zone = zoneIdx(-p.y / SCORE_DIV);   // el terreno depende de su altura
+
+    // plataforma rota: dos mitades que caen girando + trocitos
+    if (p.dead) {
+      const t = p.breakT || 0;
+      if (t <= 0 || t > 45) return;
+      const fall = t * t * 0.12, rot = t * 0.06, half = PLAT_W / 2;
+      ctx.globalAlpha = 1 - t / 45;
+      for (const side of [-1, 1]) {
+        const hx = p.x + (side < 0 ? 0 : half) + side * t * 0.7;
+        ctx.save();
+        ctx.translate(hx + half / 2, y + fall + PLAT_H / 2);
+        ctx.rotate(side * rot);
+        drawSlab(-half / 2, -PLAT_H / 2, half, 'break', zone);
+        ctx.restore();
+      }
+      ctx.fillStyle = SKINS[zone].body;
+      for (let i = 0; i < 5; i++) {
+        const dx = p.x + 10 + i * 12 + Math.sin(i * 7) * t * 0.8;
+        ctx.fillRect(dx, y + PLAT_H + fall * (1.2 + i * 0.15), 4, 4);
+      }
+      ctx.globalAlpha = 1;
+      return;
+    }
 
     if (p.type === 'hole') {
       const cx = p.x + PLAT_W/2, cy = y + PLAT_H/2;
@@ -331,20 +442,7 @@
       return;
     }
 
-    let top, body;
-    if (p.type === 'move') { top = '#58c3f5'; body = '#2e9bd6'; }
-    else if (p.type === 'break') { top = '#e6a86b'; body = '#c77d3a'; }
-    else { top = '#3e8e41'; body = '#6b4f2a'; }
-    ctx.fillStyle = body; ctx.fillRect(p.x, y, PLAT_W, PLAT_H);
-    ctx.fillStyle = top; ctx.fillRect(p.x, y, PLAT_W, 5);
-
-    if (p.type === 'break') {
-      ctx.strokeStyle = 'rgba(80,40,10,.6)';
-      ctx.beginPath();
-      ctx.moveTo(p.x+20, y); ctx.lineTo(p.x+28, y+PLAT_H);
-      ctx.moveTo(p.x+45, y); ctx.lineTo(p.x+38, y+PLAT_H);
-      ctx.stroke();
-    }
+    drawSlab(p.x, y, PLAT_W, p.type, zone);
 
     // obstáculos encima
     if (p.hazard === 'spike') {
