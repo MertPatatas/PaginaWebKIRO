@@ -271,6 +271,7 @@
   }
 
   function drawPlatform(p) {
+    if (p.dead) return;   // rota: ya no se dibuja
     const y = p.y - cameraY;
     if (y < -40 || y > H) return;
 
