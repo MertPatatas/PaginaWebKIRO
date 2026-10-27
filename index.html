@@ -104,7 +104,7 @@
   const MAX_VX = 7;
   const PLAT_W = 70, PLAT_H = 14;
 
-  let player, platforms, score, best = 0, running, cameraY;
+  let player, platforms, score, best = 0, running, cameraY, maxY;
   let keys = { left: false, right: false };
   let tiltX = 0;
 
@@ -131,6 +131,7 @@
     }
     score = 0;
     cameraY = 0;
+    maxY = player.y;
     running = true;
     over.style.display = 'none';
   }
@@ -191,11 +192,13 @@
       }
     }
 
-    // camera follows up (does NOT move the player — only the world scrolls)
-    if (player.y < H / 2) {
-      const dy = H / 2 - player.y;
-      cameraY -= dy;
-      score += Math.round(dy);
+    // camera follows the HIGHEST point reached — only scrolls up on a new
+    // record height, so standing/bouncing in place does NOT move the screen
+    if (player.y < maxY) {
+      const dy = maxY - player.y;      // how much higher than ever before
+      maxY = player.y;
+      cameraY = maxY - H / 2;           // keep the record height at mid-screen
+      score += Math.round(dy);          // score grows only with real climbing
     }
 
     spawnAbove();
