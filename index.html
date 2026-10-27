@@ -42,7 +42,7 @@
     text-align: center;
   }
   #hud small { font-weight: normal; font-size: 13px; color: #666; display: block; }
-  #over {
+  #over, #start {
     position: fixed;
     inset: 0;
     display: none;
@@ -54,9 +54,32 @@
     color: #fff;
     text-align: center;
   }
+  #start { display: flex; background: rgba(0,0,0,.6); z-index: 2; }
+  #start h1 { font-size: 46px; text-shadow: 0 3px 0 #c62828; }
+  #controls {
+    background: rgba(255,255,255,.95);
+    color: #222;
+    border-radius: 14px;
+    padding: 14px 20px;
+    font-size: 16px;
+    line-height: 1.5;
+    text-align: left;
+    max-width: 92vw;
+  }
+  #controls h2 { font-size: 17px; margin: 6px 0 2px; }
+  #controls kbd {
+    display: inline-block;
+    background: #eee;
+    border: 1px solid #999;
+    border-bottom-width: 3px;
+    border-radius: 5px;
+    padding: 0 6px;
+    font-family: inherit;
+    font-size: 14px;
+  }
   #over h1 { font-size: 40px; }
   #over p { font-size: 22px; }
-  #over button {
+  #over button, #start button {
     font-size: 20px;
     padding: 10px 24px;
     border: none;
@@ -82,6 +105,23 @@
   <div id="wrap"><canvas id="game"></canvas></div>
   <div id="hud">0<small>Nivel 1</small></div>
   <div id="hint">Moverse: flechas / A-D · Disparar huevo: Espacio o W (móvil: toca arriba)</div>
+  <div id="start">
+    <h1>🐔 Chicken Jump</h1>
+    <div id="controls">
+      <h2>💻 Ordenador</h2>
+      Moverse: <kbd>←</kbd> <kbd>→</kbd> o <kbd>A</kbd> <kbd>D</kbd><br>
+      Disparar huevo: <kbd>Espacio</kbd>, <kbd>W</kbd> o <kbd>↑</kbd> (mantén para ráfaga)
+      <h2>📱 Móvil</h2>
+      Moverse: toca abajo a la izquierda o a la derecha<br>
+      Disparar: toca la parte de arriba (mantén para ráfaga)
+      <h2>💡 Consejos</h2>
+      Cae encima de un bicho para aplastarlo.<br>
+      Los pinchos solo matan si los tocas.<br>
+      El escudo te salva de un golpe.
+    </div>
+    <button id="play">Jugar</button>
+    <small>o pulsa <kbd>Enter</kbd></small>
+  </div>
   <div id="over">
     <h1>Game Over</h1>
     <p id="finalScore">Puntos: 0</p>
@@ -185,8 +225,9 @@
   let eggs = [], shootCd = 0, poofs = [];
   function shoot() {
     if (!running || shootCd > 0) return;
-    eggs.push({ x: player.x + player.w / 2, y: player.y + 4, vy: -11 });
-    shootCd = 14;
+    // el huevo suma la subida del pollo: nunca se queda atrás
+    eggs.push({ x: player.x + player.w / 2, y: player.y + 4, vy: -11 + Math.min(0, player.vy) });
+    shootCd = 12;
   }
   function killFx(m, text) {
     m.dead = true;
@@ -348,6 +389,7 @@
     }
     // huevos: suben y matan al bicho que tocan
     if (shootCd > 0) shootCd--;
+    if (keys.shoot) shoot();
     for (const e of eggs) {
       e.y += e.vy;
       for (const m of monsters) {
@@ -1247,34 +1289,49 @@
   function loop() { update(); draw(); requestAnimationFrame(loop); }
 
   // controles
+  const isShootKey = k => k === ' ' || k === 'w' || k === 'W' || k === 'ArrowUp';
   addEventListener('keydown', e => {
-    if (e.key === ' ' || e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') { e.preventDefault(); shoot(); }
+    if (isShootKey(e.key) || e.key === 'Enter') e.preventDefault();
+    if (startScreen.style.display !== 'none') {         // pantalla de inicio
+      if (e.key === 'Enter' || e.key === ' ') startGame();
+      return;
+    }
+    if (isShootKey(e.key)) keys.shoot = true;            // mantener = disparo a ritmo fijo
     if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
     if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
   });
   addEventListener('keyup', e => {
+    if (isShootKey(e.key)) keys.shoot = false;
     if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
     if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
   });
+  addEventListener('blur', () => { keys.left = keys.right = keys.shoot = false; });
   addEventListener('deviceorientation', e => {
     if (e.gamma != null) tiltX = Math.max(-1, Math.min(1, e.gamma / 25));
   });
   addEventListener('touchstart', handleTouch);
   addEventListener('touchmove', handleTouch);
-  addEventListener('touchend', () => { keys.left = keys.right = false; });
+  addEventListener('touchend', handleTouch);
+  addEventListener('touchcancel', handleTouch);
   function handleTouch(e) {
-    keys.left = keys.right = false;
+    keys.left = keys.right = keys.shoot = false;
     for (const t of e.touches) {
-      if (t.clientY < innerHeight * 0.35) {           // arriba: disparar
-        if (e.type === 'touchstart') shoot();
-      } else {                                         // abajo: moverse
-        if (t.clientX < innerWidth / 2) keys.left = true; else keys.right = true;
-      }
+      if (t.clientY < innerHeight * 0.35) keys.shoot = true;   // arriba: disparar (mantener = ráfaga)
+      else if (t.clientX < innerWidth / 2) keys.left = true;   // abajo: moverse
+      else keys.right = true;
     }
   }
 
+  const startScreen = document.getElementById('start');
+  function startGame() {
+    startScreen.style.display = 'none';
+    keys.left = keys.right = keys.shoot = false;
+    reset();
+  }
+  document.getElementById('play').addEventListener('click', startGame);
   document.getElementById('retry').addEventListener('click', reset);
   reset();
+  running = false;   // espera en la pantalla de inicio
   loop();
 })();
 </script>
