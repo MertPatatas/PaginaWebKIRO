@@ -304,7 +304,7 @@
     if (player.y - cameraY > H) return gameOver();
 
     const badges = (player.jet > 0 ? ' · 🚀' : '') + (player.shield > 0 ? ' · 🛡️' : '');
-    hud.innerHTML = score + '<small>Nivel ' + level + badges + '</small>';
+    hud.innerHTML = score + '<small>Nivel ' + level + ' · ' + zoneFor(score) + badges + '</small>';
   }
 
   function gameOver() {
@@ -489,61 +489,277 @@
     popups = popups.filter(p => p.t > 0);
   }
 
-  // ---------- fondo que cambia con los puntos ----------
-  // día → atardecer → noche → espacio
-  const THEMES = [
-    { at: 0,    top: [120, 200, 255], bot: [225, 245, 255], stars: 0,   clouds: 1 },
-    { at: 1200, top: [255, 140, 90],  bot: [255, 215, 160], stars: 0.1, clouds: 0.8 },
-    { at: 2800, top: [15, 25, 70],    bot: [55, 70, 130],   stars: 0.8, clouds: 0.15 },
-    { at: 4800, top: [3, 0, 18],      bot: [35, 10, 60],    stars: 1,   clouds: 0 },
+  // ---------- fondo: granja → montañas → cielo → estratosfera → espacio → universo ----------
+  const ZONES = [
+    { at: 0,    name: 'Granja' },
+    { at: 250,  name: 'Montañas' },
+    { at: 900,  name: 'Cielo' },
+    { at: 2500, name: 'Estratosfera' },
+    { at: 4000, name: 'Espacio' },
+    { at: 6500, name: 'Universo' },
   ];
-  const STARS = Array.from({ length: 70 }, () => ({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.6 + 0.4 }));
-  const CLOUDS = Array.from({ length: 6 }, () => ({ x: Math.random() * W, y: Math.random() * H, s: 0.7 + Math.random() * 0.8 }));
+  function zoneFor(s) { let n = ZONES[0].name; for (const z of ZONES) if (s >= z.at) n = z.name; return n; }
 
-  function themeNow() {
+  const SKY = [
+    { at: 0,    top: [110, 190, 250], bot: [205, 238, 255] },
+    { at: 250,  top: [90, 175, 245],  bot: [180, 225, 255] },
+    { at: 900,  top: [55, 125, 230],  bot: [150, 200, 250] },
+    { at: 2500, top: [18, 35, 105],   bot: [70, 105, 185] },
+    { at: 4000, top: [2, 3, 18],      bot: [8, 12, 40] },
+    { at: 6500, top: [14, 0, 32],     bot: [48, 6, 72] },
+  ];
+  function skyNow(s) {
     let i = 0;
-    while (i < THEMES.length - 1 && score >= THEMES[i + 1].at) i++;
-    const a = THEMES[i], b = THEMES[Math.min(i + 1, THEMES.length - 1)];
-    const t = a === b ? 0 : Math.min(1, (score - a.at) / (b.at - a.at));
+    while (i < SKY.length - 1 && s >= SKY[i + 1].at) i++;
+    const a = SKY[i], b = SKY[Math.min(i + 1, SKY.length - 1)];
+    const t = a === b ? 0 : Math.min(1, (s - a.at) / (b.at - a.at));
     const mix = (u, v) => u.map((c, k) => Math.round(c + (v[k] - c) * t));
-    return { top: mix(a.top, b.top), bot: mix(a.bot, b.bot),
-             stars: a.stars + (b.stars - a.stars) * t,
-             clouds: a.clouds + (b.clouds - a.clouds) * t };
+    return [mix(a.top, b.top), mix(a.bot, b.bot)];
+  }
+  // opacidad: sube de a→b, llena hasta c, baja hasta d
+  function band(s, a, b, c, d) {
+    if (s <= a || s >= d) return 0;
+    if (s < b) return (s - a) / (b - a);
+    if (s <= c) return 1;
+    return 1 - (s - c) / (d - c);
+  }
+  // objeto que "pasa" de arriba (start) a abajo (end) mientras subes
+  function passY(s, start, end) { return -100 + (s - start) / (end - start) * (H + 200); }
+  // posición que se repite en vertical con parallax
+  function wrapY(y, f, span) { return ((y - cameraY * f) % span + span) % span - (span - H) / 2; }
+
+  const STARS = Array.from({ length: 90 }, () => ({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.6 + 0.4 }));
+  const CLOUDS = Array.from({ length: 8 }, () => ({ x: Math.random() * W, y: Math.random() * H, s: 0.7 + Math.random() * 0.9 }));
+  const BIRDS = Array.from({ length: 5 }, () => ({ x: Math.random() * W, y: 60 + Math.random() * 220, v: 0.4 + Math.random() * 0.6 }));
+  const NEBULAE = Array.from({ length: 3 }, (_, i) => ({ x: 60 + i * 140, y: Math.random() * H, r: 120 + Math.random() * 60, hue: [280, 200, 330][i] }));
+  const GALAXIES = Array.from({ length: 5 }, () => ({ x: Math.random() * W, y: Math.random() * H, r: 16 + Math.random() * 24, a: Math.random() * Math.PI, hue: Math.floor(Math.random() * 360) }));
+
+  function drawFarm() {
+    const g = H - 30 - cameraY * 0.15;   // suelo: baja despacio al subir
+    if (g - 230 > H) return;
+    // colinas
+    ctx.fillStyle = '#7cc56b';
+    ctx.beginPath(); ctx.ellipse(90, g + 10, 170, 75, 0, Math.PI, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#6ab35a';
+    ctx.beginPath(); ctx.ellipse(330, g + 10, 190, 60, 0, Math.PI, Math.PI * 2); ctx.fill();
+    // granero
+    const bx = 25, bw = 90, bh = 70;
+    ctx.fillStyle = '#c62828'; ctx.fillRect(bx, g - bh, bw, bh);
+    ctx.fillStyle = '#8e1b1b';
+    ctx.beginPath(); ctx.moveTo(bx - 8, g - bh); ctx.lineTo(bx + bw / 2, g - bh - 40); ctx.lineTo(bx + bw + 8, g - bh); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillRect(bx + 30, g - 40, 30, 40);
+    ctx.strokeStyle = '#c62828'; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(bx + 30, g - 40); ctx.lineTo(bx + 60, g);
+    ctx.moveTo(bx + 60, g - 40); ctx.lineTo(bx + 30, g);
+    ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.fillRect(bx + 38, g - bh - 22, 14, 12);
+    // silo
+    ctx.fillStyle = '#b0bec5'; ctx.fillRect(bx + bw + 6, g - 100, 30, 100);
+    ctx.fillStyle = '#90a4ae'; ctx.beginPath(); ctx.arc(bx + bw + 21, g - 100, 15, Math.PI, Math.PI * 2); ctx.fill();
+    // árbol
+    ctx.fillStyle = '#6d4c41'; ctx.fillRect(322, g - 50, 12, 50);
+    ctx.fillStyle = '#2e7d32';
+    ctx.beginPath();
+    ctx.arc(328, g - 64, 24, 0, Math.PI * 2);
+    ctx.arc(310, g - 50, 16, 0, Math.PI * 2);
+    ctx.arc(346, g - 50, 16, 0, Math.PI * 2);
+    ctx.fill();
+    // valla
+    ctx.fillStyle = '#fff8e1';
+    for (let x = 170; x < 300; x += 18) ctx.fillRect(x, g - 26, 5, 26);
+    ctx.fillRect(165, g - 22, 135, 4); ctx.fillRect(165, g - 12, 135, 4);
+    // suelo
+    ctx.fillStyle = '#5aa845'; ctx.fillRect(0, g, W, H);
+    ctx.fillStyle = '#8d6e63'; ctx.fillRect(0, g + 18, W, H);
+    ctx.lineWidth = 1;
+  }
+
+  function drawMountains() {
+    const base = H + 20 - cameraY * 0.05;
+    if (base - 330 > H) return;
+    const peaks = [[-40, 220], [70, 310], [190, 240], [300, 330], [430, 230]];
+    ctx.fillStyle = '#8a9bb0';
+    ctx.beginPath(); ctx.moveTo(-60, base);
+    for (const [x, h] of peaks) { ctx.lineTo(x, base - h); ctx.lineTo(x + 60, base - h * 0.55); }
+    ctx.lineTo(W + 60, base); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff';
+    for (const [x, h] of peaks) {
+      ctx.beginPath(); ctx.moveTo(x, base - h); ctx.lineTo(x - 16, base - h + 28); ctx.lineTo(x + 14, base - h + 24); ctx.closePath(); ctx.fill();
+    }
+  }
+
+  function drawBalloon(x, y) {
+    ctx.fillStyle = '#e53935';
+    ctx.beginPath(); ctx.ellipse(x, y, 26, 32, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fdd835';
+    ctx.beginPath(); ctx.ellipse(x, y, 10, 32, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#5d4037';
+    ctx.beginPath(); ctx.moveTo(x - 18, y + 22); ctx.lineTo(x - 7, y + 44); ctx.moveTo(x + 18, y + 22); ctx.lineTo(x + 7, y + 44); ctx.stroke();
+    ctx.fillStyle = '#8d6e63'; ctx.fillRect(x - 8, y + 44, 16, 11);
+  }
+
+  function drawPlane(x, y) {
+    ctx.fillStyle = '#eceff1';
+    ctx.beginPath(); ctx.ellipse(x, y, 34, 7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#b0bec5';
+    ctx.beginPath(); ctx.moveTo(x - 4, y); ctx.lineTo(x + 12, y + 20); ctx.lineTo(x + 18, y); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x + 24, y); ctx.lineTo(x + 34, y - 16); ctx.lineTo(x + 36, y); ctx.fill();
+    ctx.fillStyle = '#29b6f6';
+    for (let i = 0; i < 4; i++) ctx.fillRect(x - 22 + i * 8, y - 3, 4, 3);
+  }
+
+  function drawSatellite(x, y) {
+    ctx.fillStyle = '#1565c0';
+    ctx.fillRect(x - 30, y - 6, 20, 12); ctx.fillRect(x + 10, y - 6, 20, 12);
+    ctx.fillStyle = '#cfd8dc'; ctx.fillRect(x - 10, y - 9, 20, 18);
+    ctx.strokeStyle = '#cfd8dc';
+    ctx.beginPath(); ctx.moveTo(x, y - 9); ctx.lineTo(x, y - 18); ctx.stroke();
+  }
+
+  function drawEarth(top) {
+    const R = 700, cx = W / 2, cy = top + R;
+    ctx.fillStyle = 'rgba(120,190,255,.35)';
+    ctx.beginPath(); ctx.arc(cx, cy, R + 14, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1e64c8';
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#43a047';
+    ctx.beginPath(); ctx.ellipse(100, top + 40, 60, 18, 0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(290, top + 60, 80, 22, -0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.7)';
+    ctx.beginPath(); ctx.ellipse(200, top + 30, 50, 8, 0, 0, Math.PI * 2); ctx.fill();
+  }
+
+  function drawMoon(x, y) {
+    ctx.fillStyle = '#e0e0e0';
+    ctx.beginPath(); ctx.arc(x, y, 34, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#bdbdbd';
+    ctx.beginPath(); ctx.arc(x - 10, y - 8, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + 12, y + 6, 9, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x - 4, y + 16, 5, 0, Math.PI * 2); ctx.fill();
+  }
+
+  function drawSaturn(x, y) {
+    ctx.strokeStyle = '#d7b98a'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.ellipse(x, y, 46, 12, -0.3, Math.PI, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#e8c27a';
+    ctx.beginPath(); ctx.arc(x, y, 26, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(160,110,50,.4)';
+    ctx.fillRect(x - 24, y - 6, 48, 5);
+    ctx.beginPath(); ctx.ellipse(x, y, 46, 12, -0.3, 0, Math.PI); ctx.stroke();
+    ctx.lineWidth = 1;
   }
 
   function drawBackground() {
-    const th = themeNow();
+    const s = score;
+    const [top, bot] = skyNow(s);
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, 'rgb(' + th.top + ')');
-    g.addColorStop(1, 'rgb(' + th.bot + ')');
+    g.addColorStop(0, 'rgb(' + top + ')');
+    g.addColorStop(1, 'rgb(' + bot + ')');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
-    // estrellas (parallax lento)
-    if (th.stars > 0) {
+    // estrellas
+    const sa = band(s, 2200, 4000, 1e12, 1e13);
+    if (sa > 0) {
       ctx.fillStyle = '#fff';
-      for (const s of STARS) {
-        const sy = ((s.y - cameraY * 0.05) % H + H) % H;
-        ctx.globalAlpha = th.stars * (0.6 + 0.4 * Math.sin(frame * 0.05 + s.x));
-        ctx.beginPath(); ctx.arc(s.x, sy, s.r, 0, Math.PI*2); ctx.fill();
+      for (const st of STARS) {
+        ctx.globalAlpha = sa * (0.6 + 0.4 * Math.sin(frame * 0.05 + st.x));
+        ctx.beginPath(); ctx.arc(st.x, wrapY(st.y, 0.03, H), st.r, 0, Math.PI * 2); ctx.fill();
       }
       ctx.globalAlpha = 1;
     }
-    // nubes (parallax medio)
-    if (th.clouds > 0) {
-      ctx.globalAlpha = th.clouds * 0.85;
+
+    // universo: nebulosas y galaxias
+    const ua = band(s, 6000, 7000, 1e12, 1e13);
+    if (ua > 0) {
+      for (const n of NEBULAE) {
+        const ny = wrapY(n.y, 0.02, H + 300);
+        const ng = ctx.createRadialGradient(n.x, ny, 5, n.x, ny, n.r);
+        ng.addColorStop(0, 'hsla(' + n.hue + ',90%,65%,' + (0.45 * ua) + ')');
+        ng.addColorStop(1, 'hsla(' + n.hue + ',90%,40%,0)');
+        ctx.fillStyle = ng;
+        ctx.beginPath(); ctx.arc(n.x, ny, n.r, 0, Math.PI * 2); ctx.fill();
+      }
+      for (const ga of GALAXIES) {
+        const gy = wrapY(ga.y, 0.04, H + 100);
+        ctx.save();
+        ctx.translate(ga.x, gy);
+        ctx.rotate(ga.a + frame * 0.002);
+        ctx.globalAlpha = ua;
+        const gg = ctx.createRadialGradient(0, 0, 1, 0, 0, ga.r);
+        gg.addColorStop(0, '#fff');
+        gg.addColorStop(0.3, 'hsla(' + ga.hue + ',80%,70%,.8)');
+        gg.addColorStop(1, 'hsla(' + ga.hue + ',80%,50%,0)');
+        ctx.fillStyle = gg;
+        ctx.beginPath(); ctx.ellipse(0, 0, ga.r, ga.r * 0.35, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // sol (de día)
+    const suna = band(s, -1, 0, 1800, 2700);
+    if (suna > 0) {
+      ctx.globalAlpha = suna;
+      ctx.fillStyle = 'rgba(255,235,59,.35)';
+      ctx.beginPath(); ctx.arc(330, 80, 46, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffeb3b';
+      ctx.beginPath(); ctx.arc(330, 80, 32, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // espacio: Tierra abajo, satélite, Luna, Saturno
+    const ea = band(s, 3600, 4100, 4900, 5600);
+    if (ea > 0) {
+      ctx.globalAlpha = ea;
+      drawEarth(H - 160 + Math.max(0, s - 4100) / 1500 * 340);
+      ctx.globalAlpha = 1;
+    }
+    if (s > 3700 && s < 4900) drawSatellite((frame * 0.6) % (W + 80) - 40, passY(s, 3700, 4900));
+    if (s > 4200 && s < 6200) drawMoon(300, passY(s, 4200, 6200));
+    if (s > 5200 && s < 7200) drawSaturn(100, passY(s, 5200, 7200));
+
+    // paisajes de abajo
+    drawMountains();
+
+    // nubes
+    const ca = Math.max(0.6 * band(s, -1, 0, 0, 700), band(s, 200, 700, 2200, 3000));
+    if (ca > 0) {
+      ctx.globalAlpha = ca * 0.9;
       ctx.fillStyle = '#fff';
       for (const c of CLOUDS) {
-        const cy = ((c.y - cameraY * 0.3) % (H + 80) + H + 80) % (H + 80) - 40;
+        const cy = wrapY(c.y, 0.3, H + 80);
         const r = 18 * c.s;
         ctx.beginPath();
-        ctx.arc(c.x, cy, r, 0, Math.PI*2);
-        ctx.arc(c.x + r, cy - r * 0.4, r * 1.1, 0, Math.PI*2);
-        ctx.arc(c.x + r * 2, cy, r, 0, Math.PI*2);
+        ctx.arc(c.x, cy, r, 0, Math.PI * 2);
+        ctx.arc(c.x + r, cy - r * 0.4, r * 1.1, 0, Math.PI * 2);
+        ctx.arc(c.x + r * 2, cy, r, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.globalAlpha = 1;
     }
+
+    drawFarm();
+
+    // pájaros (granja y montañas)
+    const ba = band(s, -1, 0, 700, 1100);
+    if (ba > 0) {
+      ctx.globalAlpha = ba;
+      ctx.strokeStyle = '#37474f'; ctx.lineWidth = 2;
+      for (const b of BIRDS) {
+        const bx = (b.x + frame * b.v) % (W + 40) - 20;
+        const w = Math.sin(frame * 0.2 + b.x) * 3;
+        ctx.beginPath();
+        ctx.moveTo(bx - 7, b.y - w); ctx.lineTo(bx, b.y); ctx.lineTo(bx + 7, b.y - w);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1; ctx.lineWidth = 1;
+    }
+
+    // globo y avión (cielo)
+    if (s > 800 && s < 2000) drawBalloon(280 + Math.sin(frame * 0.01) * 20, passY(s, 800, 2000));
+    if (s > 1500 && s < 2700) drawPlane(W + 60 - (frame * 1.2) % (W + 140), passY(s, 1500, 2700));
   }
 
   // ---------- pollo ----------
